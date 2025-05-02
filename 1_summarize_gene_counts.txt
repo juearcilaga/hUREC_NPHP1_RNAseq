@@ -1,0 +1,58 @@
+###########################################################################
+# Script:   summarize_gene_counts.R
+# Purpose:  Generate a gene-level count matrix from RNA-seq BAM files
+# Author:   Dr. Juliana E. Arcila Galvis
+# Date:     February 24, 2025
+#
+# Description:
+# This script uses gene annotations and alignment data to compute gene-level
+# read counts from RNA-seq data using `summarizeOverlaps`. 
+#
+# Inputs:
+# - genome.gtf: GTF file containing gene annotations (Reference Genome Version hg38)
+# - metadata_nphp1_24feb2025.txt:Tab-delimited file with sample metadata and BAM 
+#  file paths. Columns: sample_id, patient_id, gene, disease, treatment, sex, path
+# - BAM files (reads from RNA-seq experiments aligned to hg38)
+#
+# Outputs:
+# - raw_gene_counts_24Feb2025.tsv: Gene count matrix
+# - raw_gene_counts_24Feb2025.RData: Workspace image for further analysis
+###########################################################################
+
+# Load required Bioconductor libraries
+library(GenomicFeatures)     # For working with genome annotations
+library(Rsamtools)           # For reading BAM files
+library(GenomicAlignments)   # For summarizing overlaps of reads with features
+
+# Set the working directory where all data is located
+setwd("NPHPP1_project/")
+
+# Create a TxDb object (transcript database) from the GTF file
+# This represents gene models (exons, transcripts, etc.)
+hse = txdbmaker::makeTxDbFromGFF(
+  "genome.gtf",
+  format = "gtf"
+)
+
+# Extract exons grouped by gene for counting
+exonsByGene = exonsBy(hse, by = "gene")
+
+# Read in sample information including paths to BAM files
+sampleInfo = read.delim("metadata_nphp1_24feb2025.txt", sep = "\t")
+allFiles = sampleInfo$path  # Extract the BAM file paths
+
+# Create a list of BAM files for processing, setting a yieldSize for memory efficiency
+allBams = BamFileList(allFiles, yieldSize = 100000)
+
+# Summarize read overlaps with exons by gene to generate a count matrix
+se = summarizeOverlaps(
+  features = exonsByGene,
+  reads = allBams,
+  mode = "Union",            # Count a read if it overlaps any part of a feature
+  singleEnd = FALSE,         # Set to FALSE for paired-end reads
+
+colnames(se) = substr(colnames(se), 1, nchar(colnames(se)) - 4)
+
+write.table(as.data.frame(assay(se)), "raw_gene_counts_24Feb2025.tsv", sep = "\t")
+save.image("raw_gene_counts_24Feb2025.RData")
+

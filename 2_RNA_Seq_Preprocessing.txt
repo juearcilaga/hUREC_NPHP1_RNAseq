@@ -1,0 +1,232 @@
+#---
+# Title: "RNA_Seq_Preprocessing.R"
+# Author: "Dr. Juliana Arcila"
+# Date: "27/02/2025"
+# Description: 
+# This script performs RNA sequencing data pre-processing (filtering, normalization) before
+# differential expression analysis using DESeq2.
+# This analysis includes the comparison among untreated hURECs samples from NPHP1 patient and hURECs 
+# treated with either a EGFR kinase inhibitor or with an agonist of prostaglandin E2 receptor
+#---
+
+#---
+# Inputs:
+# - raw_counts_all_3batches.txt: Contains gene-level expression quantifications for 19 hUREC 
+# from untreated & drug-treated samples from Controls and patients with kidney diseases
+# - mart_export_GRCh38.p14.txt: Biomart data from Ensembl genes GRCh38.p14 chromosomes 1:22,X,Y
+# - sampleInfoAll.txt: :Tab-delimited file with sample metadata and BAM file paths. Columns: 
+# sample_id, patient_id, sex, disease, type , treatment ,BATCH,path
+
+#---
+# Outputs:
+# - Genes_hurecs.rds: customised gene annotations 
+# - lcpm_counts_treatment.txt: Log2 CPM normalized expression values.
+# - cpm_counts_treatment.txt: CPM normalized expression values.
+# - ComBat_corrected_filtered_log_counts_treatments.rds: Batch corrected log2(CPM)
+# - PCA_plot.svg 
+# - PC_variance_plot.svg
+#---
+
+#-------------------------------------------
+# Set working directory and import libraries
+#-------------------------------------------
+setwd("NPHP1_project/")
+library(DESeq2)
+library(biomaRt)
+library(edgeR)
+library(dplyr)
+library(sva)
+library(dplyr)
+library(ggplot2)
+#-------------------------------------------
+# Load raw counts and metadata 
+#-------------------------------------------
+# Contains expression quantifications for 19 hUREC samples from:
+# - Controls (JC, SIB)
+# - Patients with kidney diseases: CB (NPHP1-NPHP), AA & HB (CEP290-Joubert syndrome)
+# - Includes untreated & drug-treated samples (kinase inhibitor, ALP)
+# Samples are from three different batches
+
+# Load raw counts
+raw_counts_all_3batches<-read.table("input/raw_counts_all_3batches.txt", header=TRUE, sep="\t")
+
+#  metadata
+sampleInfoAll <- read.table("input/sampleInfoAll.txt", sep="\t", header=TRUE)
+
+#-------------------------------------------
+# Gene annotations 
+#-------------------------------------------
+# Import gene annotations from Ensembl Biomart
+Biomart <- read.delim("input/mart_export_GRCh38.p14.txt")
+
+# Assign Ensembl ID for genes without a gene symbol
+Genes_hurecs <- Biomart[Biomart$Gene.stable.ID %in% rownames(raw_counts_all), ]
+Genes_hurecs[Genes_hurecs$Gene.name == "", ]$Gene.name <- Genes_hurecs[Genes_hurecs$Gene.name == "", ]$Gene.stable.ID
+saveRDS(Genes_hurecs,Genes_hurecs.rds)
+
+# Remove mitochondrial genes
+raw_counts_noMito <- raw_counts_all[rownames(raw_counts_all) %in% Genes_hurecs$Gene.stable.ID, ]
+
+-------------------------------------------------------------------------------
+# Filter lowly expressed genes
+#-------------------------------------------------------------------------------
+nsamples <- length(colnames(raw_counts_noMito))
+zeros <- table(rowSums(raw_counts_noMito == 0) == nsamples)
+print("Features with zero counts across all samples:")
+print(zeros)
+
+# Remove genes with zero counts in all samples
+raw_counts_noMito_noZeros <- raw_counts_noMito[rowSums(raw_counts_noMito == 0) != nsamples, ]
+dim(raw_counts_noMito_noZeros)
+
+#-------------------------------------------------------------------------------
+# Transform counts for visualisation and QC
+#-------------------------------------------------------------------------------
+#Select samples for comparisons
+case_control<-c("control_rep1", "control_rep2", "NPHP1_rep1","NPHP1_rep2")
+treatment_DMSO<-c("NPHP1_rep1","NPHP1_rep2","NPHP1_rep1_DMSO","NPHP1_rep2_DMSO")
+treatment_AG556<-c("NPHP1_rep1","NPHP1_rep2", "NPHP1_rep1_AG556","NPHP1_rep2_AG556")
+treatment_ALP<-c("NPHP1_rep1","NPHP1_rep2", "NPHP1_rep1_ALP","NPHP1_rep2_ALP")
+
+selected_samples<-treatment_ALP #Change for the other comparison if needed
+
+counts <- raw_counts_noMito_noZeros[,selected_samples]
+dim(counts)
+
+# Normalize data using edgeR
+counts <- DGEList(counts=counts, lib.size=colSums(counts))
+counts <- calcNormFactors(counts, method="TMM")
+
+# Transformations from the raw-scale to counts per million (CPM) 
+cpm <- cpm(counts)
+lcpm <- cpm(counts, log=TRUE)
+
+L <- mean(counts$samples$lib.size)*1e-6
+M <- median(counts$samples$lib.size)*1e-6
+
+print("Mean and median library size values")
+print(summary(counts$samples$lib.size))
+
+Comparison_name<-"treatment_ALP" #Change for the other comparison if needed
+write.table(cpm, sprintf("cpm_counts_%s.txt", Comparison_name), sep="\t")
+write.table(lcpm, sprintf("lcpm_counts_%s.txt", Comparison_name), sep="\t") 
+
+
+# Compute flags based on normalized counts threshold
+flag_matrix <- ifelse(cpm >= 0.5, 1, 0)
+
+# Identify P50 genes (genes with flag = 1 in at least 50% of samples)
+p50_genes <- rownames(flag_matrix)[rowMeans(flag_matrix) >= 0.5]
+
+length(p50_genes)
+
+# Subset counts matrix to only P50 genes
+counts_p50 <- counts[rownames(counts) %in% p50_genes, ]
+
+# Remove zero variance rows
+count_data<- cpm(counts_p50)
+count_data <- count_data[apply(count_data, 1, var) > 0, ]  
+
+log_counts <- log2(count_data +1)
+#-------------------------------------------
+# Correct for batch effects
+#-------------------------------------------
+metadata <-sampleInfoAll%>%filter(sample_id %in% selected_samples)
+metadata$BATCH<- as.factor(metadata$BATCH)# Convert to factor for ComBat
+mod <- model.matrix(~ 1, data=metadata)  # Adjust for biological covariates if needed
+combat_data <- ComBat(dat=log_counts, batch=batch_labels, mod=mod)
+
+log_counts<-combat_data 
+
+saveRDS(log_counts, "output/ComBat_corrected_filtered_log_counts_treatments.rds")
+
+#-------------------------------------------------------------------------------
+# PCA Analysis of Normalised Count Data
+#-------------------------------------------------------------------------------
+# Perform PCA
+pca <- prcomp(t(log_counts), scale. = TRUE)  # Transpose so samples are rows
+pca_data <- as.data.frame(pca$x)
+pca_data$Sample <- rownames(pca_data)  # Add sample names
+
+# Calculate variance explained by each PC
+percentVar <- pca$sdev^2 / sum(pca$sdev^2) * 100
+
+
+# Extract variance explained for the first 20 PCs
+variance_df <- data.frame(
+  PC = factor(paste0("PC", 1:20), levels = paste0("PC", 1:20)),  # Ensure correct order
+  Variance = percentVar[1:20]
+)
+
+
+# Create bar plot
+variance_plot <- ggplot(variance_df, aes(x = PC, y = Variance)) +
+  geom_bar(stat = "identity", fill = "#D1D1D1") +
+  labs(title = "Variance Explained by Principal Components",
+       x = "Principal Component",
+       y = "Variance Explained (%)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+  # Rotate x-axis labels
+  ylim(0, 100)  # Set y-axis limit to always be 100
+
+# Print the plot
+print(variance_plot)
+
+ggsave(
+  "figures/PC_variance_plot.svg", #Change to names of interest
+  plot = variance_plot,
+  width = 5,
+  height = 3,
+  dpi = 300,
+  device = "svg"
+)
+
+pc1_var <- round(percentVar[1], 2)
+pc2_var <- round(percentVar[2], 2)
+
+# Create PCA plot
+pca_data$Type <- #Change to accomodate samples of interest
+  c(
+    # "control_untreated",
+    # "control_untreated",
+    # "NPHP1_untreated",
+    # "NPHP1_untreated",
+    "NPHP1_DMSO",
+    "NPHP1_DMSO",
+    "NPHP1_AG556",
+    "NPHP1_AG556",
+    "NPHP1_ALP",
+    "NPHP1_ALP"
+  )
+
+
+PCA_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, label = Sample)) +
+  geom_point(aes(color = Type), size = 2) +
+  geom_text(vjust = -1.5, size = 3) +
+  labs(
+    title = "PCA of Count Data",
+    x = paste0("PC1: ", pc1_var, "% variance"),
+    y = paste0("PC2: ", pc2_var, "% variance")
+  ) +
+  theme_minimal() +
+  scale_color_manual(
+    values = c(
+      # control_untreated = "#367156",
+      # NPHP1_untreated = "#b87800",
+      NPHP1_DMSO = "#939294",
+      NPHP1_AG556 = "purple",
+      NPHP1_ALP = "#17659c"
+    )
+  )  #Change to treatment of interest
+
+# Print PCA plot
+print(PCA_plot)
+
+ggsave(
+  "figures/PCA_plot.svg", #Change to names of interest
+  plot = PCA_plot ,
+  width = 4.5,
+  height = 3,
+  dpi = 300,
+  device = "svg"
+)

@@ -1,0 +1,175 @@
+# ------------------------------------------------------------------------------
+# Script Name: Pathway_Enrichment_Analysis.R
+# Description: 
+# This script performs Gene Set Enrichment Analysis (GSEA) for Differentially 
+# Expressed Genes (DEGs), visualizes enriched GO terms via clustering and networks 
+# using aPEAR, and optionally processes enrichment results exported from Metascape 
+# to generate barplots. It also supports extraction of genes for selected GO clusters 
+# for downstream analysis (e.g., heatmaps).
+
+# Author: Dr. Juliana E. Arcila Galvis
+# Date: 2024-11-01
+
+# ------------------------------------------------------------------------------
+# INPUT FILES:
+#
+# 1. DESeq2 results file (CSV):
+#    Required columns:
+#    - padj               : Adjusted p-value (FDR)
+#    - log2FoldChange     : Log2 fold change for gene expression
+#    - stat               : Test statistic (used for ranking in GSEA)
+#    - Entrez             : Entrez gene ID (required for enrichment tools)
+#    - lfcSE              : Standard error of log2 fold change (used for filtering)
+#    - baseMean           : Mean of normalized counts (used for filtering)
+#
+# 2. GO annotation file from BioMart (TSV):
+#    Required columns:
+#    - GO.term.name                          : Full GO term description
+#    - GO.term.accession                     : GO identifier (e.g., GO:0008150)
+#    - NCBI.gene..formerly.Entrezgene..ID    : Entrez Gene ID
+#
+# 3. (Optional) Metascape enrichment result (TSV, e.g. UP_metascape_curated.txt):
+#    Required columns:
+#    - Description      : Pathway or GO term name
+#    - Log(q-value)     : Negative log10 of q-value (for significance plotting)
+#    - Symbols          : Comma-separated gene symbols involved in the term
+#    - pathwayGenes     : (Optional) Size of the full pathway/gene set
+#    - n_genes_mapped   : (Optional) Number of input genes mapping to the term
+#
+# ------------------------------------------------------------------------------
+# OUTPUT FILES:
+#
+# - Enrichment results:
+#     * output/enrichBP.txt     : GSEA results for Biological Process
+#     * output/enrichCC.txt     : GSEA results for Cellular Component
+#     * output/df_enrichBMF.txt : GSEA results for Molecular Function
+#
+# - Cluster assignments:
+#     * output/clustersBP.rds
+#     * output/clustersCC.rds
+#     * output/clusters_BMF.rds
+#
+# - Visualizations:
+#     * outputs/apear_CC.svg    : Network plot of clustered GO terms
+#     * Barplots (Metascape)    : Generated dynamically using ggplot2
+#
+# - Heatmap gene list:
+#     * heatmap_genes.rds       : Filtered DEG list mapped to GO clusters
+#
+# ------------------------------------------------------------------------------
+# Load Required Libraries
+# -------------------------
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(DOSE)
+library(aPEAR)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(stringr)
+
+# -------------------------
+# User Input & Setup
+# -------------------------
+setwd("NPHP1_project/")  # Adjust this path accordingly
+
+# Input files
+deseq_file <- "Deseq_results.csv"
+go_terms_file <- "mart_export_GRCh38.p14.txt"
+
+# -------------------------
+# 1. Prepare Data
+# -------------------------
+Deseq_results <- read.delim(deseq_file, sep = ",")
+Goterms <- read.delim(go_terms_file)
+
+Deseq_filtered <- Deseq_results %>%
+  filter(padj < 0.05 | is.na(padj) & abs(log2FoldChange) > 1) %>%
+  arrange(-stat) %>%
+  filter(Entrez != "NA")
+
+gene_list <- Deseq_filtered$stat
+names(gene_list) <- Deseq_filtered$Entrez
+
+# -------------------------
+# 2. Enrichment Analysis
+# -------------------------
+run_gsea_and_cluster <- function(ontology) {
+  enrich <- gseGO(geneList = gene_list, OrgDb = org.Hs.eg.db,
+                  ont = ontology, minGSSize = 10, maxGSSize = 200)
+  df_enrich <- enrich@result %>% arrange(-abs(enrichmentScore), p.adjust)
+  write.table(df_enrich, paste0("output/enrich_", ontology, ".txt"), sep = "\t", row.names = FALSE)
+  clusters <- aPEAR::findPathClusters(df_enrich, methods = aPEAR.methods, minClusterSize = 3)
+  saveRDS(clusters, paste0("output/clusters_", ontology, ".rds"))
+  return(list(enrich = enrich, clusters = clusters))
+}
+
+results_BP <- run_gsea_and_cluster("BP")
+results_CC <- run_gsea_and_cluster("CC")
+results_MF <- run_gsea_and_cluster("MF")
+
+# -------------------------
+# 3. Visualize GO Term Clusters
+# -------------------------
+plot_cluster <- function(result, name) {
+  plot <- aPEAR::plotPathClusters(
+    enrichment = result$enrich@result,
+    sim = result$clusters$similarity,
+    clusters = result$clusters$clusters,
+    fontSize = 4,
+    outerCutoff = 1,
+    drawEllipses = TRUE
+  )
+  ggsave(paste0("output/apear_", name, ".svg"), plot = plot, width = 6, height = 5)
+}
+
+plot_cluster(results_BP, "BP")
+plot_cluster(results_CC, "CC")
+plot_cluster(results_MF, "MF")
+
+# -------------------------
+# 4. Extract Gene Lists per Cluster
+# -------------------------
+extract_genes <- function(clusters_obj, cluster_name) {
+  listofinterest <- clusters_obj$clusters[clusters_obj$clusters$Cluster == cluster_name, "Pathway"]
+  go_ids <- unique(Goterms$GO.term.accession[Goterms$GO.term.name %in% listofinterest])
+  entrez_genes <- unique(Goterms$NCBI.gene..formerly.Entrezgene..ID[Goterms$GO.term.name %in% listofinterest])
+  genes_for_heatmap <- Deseq_filtered[Deseq_filtered$Entrez %in% entrez_genes, ]
+  return(genes_for_heatmap)
+}
+
+# Example: Top genes from selected clusters # Change to cluster of interest
+
+top_genes <- extract_genes(results_BP, "carboxylic acid metabolic process") %>%
+  filter(lfcSE < 0.5 & baseMean > 400 & log2FoldChange > 0)
+top_genes$cluster_GO <- "carboxylic acid metabolic process"
+
+saveRDS(top_genes, "top_genes_carboxylic.rds")
+
+# -------------------------
+# 5. Metascape Output Barplots
+# -------------------------
+# Choose one:
+# df <- read.delim("UP_metascape_curated.txt", sep = "\t")  # Upregulated
+df <- read.delim("DOWN_metascape_curated.txt", sep = "\t")  # Downregulated
+
+# Add gene count by counting commas + 1 in the 'Symbols' column
+df <- df %>%
+  mutate(
+    Count = str_count(Symbols, ",") + 1,
+    Description = factor(Description, levels = rev(unique(Description)))
+  ) %>%
+  arrange(-Count)
+
+# Barplot of Metascape enrichment (adjust color scale depending on direction)
+ggplot(df, aes(x = Description, y = Count, fill = -Log_q_value)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(y = Count, label = Symbols), hjust = 0, size = 2, fontface = "italic") +
+  coord_flip() +
+  scale_fill_gradient(low = "#E7EBF1", high = "#3F5F8C") +  # Use red scale for UP
+  labs(x = "Enriched Term", y = "Gene Count", fill = "-log10(q-value)") +
+  theme_light() +
+  theme(axis.text.y = element_text(size = 7), legend.position = "top")
+
+# Optionally save
+ggsave("outputs/metascape_barplot.svg", width = 6, height = 5)

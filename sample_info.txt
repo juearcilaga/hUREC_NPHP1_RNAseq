@@ -1,0 +1,11 @@
+sample_id	patient_id	sex	gene	Disease	phenotype	treatment	BATCH	path
+control_rep1	control	male	NA	control	normal	untreated	7/2/2024	control_UT_2023.bam
+control_rep2	control	male	NA	control	normal	untreated	4/3/2024	control_UT_2024.bam
+NPHP1_rep1	NPHP1	male	NPHP1	 nephronophthisis	long_cilia	untreated	19/8/2024	NPHP1_UT_2023.bam
+NPHP1_rep2	NPHP1	male	NPHP1	 nephronophthisis	long_cilia	untreated	20/9/2024	NPHP1_UT_2024.bam
+NPHP1_rep1_DMSO	NPHP1	male	NPHP1	 nephronophthisis	unknown	DMSO	13/1/2025	NPHP1_DMSO_2023.bam
+NPHP1_rep2_DMSO	NPHP1	male	NPHP1	 nephronophthisis	unknown	DMSO	12/2/2025	NPHP1_DMSO_2024.bam
+NPHP1_rep1_AG556	NPHP1	male	NPHP1	 nephronophthisis	shorter_cilia	AG556	13/1/2025	NPHP1_AG556_2023.bam
+NPHP1_rep2_AG556	NPHP1	male	NPHP1	 nephronophthisis	shorter_cilia	AG556	13/1/2025	NPHP1_AG556_2024.bam
+NPHP1_rep1_ALP	NPHP1	male	NPHP1	 nephronophthisis	long_cilia	Alprostadil	12/2/2025	NPHP1_ALP_2023.bam
+NPHP1_rep2_ALP	NPHP1	male	NPHP1	 nephronophthisis	long_cilia	Alprostadil	13/1/2025	NPHP1_ALP_2024.bam

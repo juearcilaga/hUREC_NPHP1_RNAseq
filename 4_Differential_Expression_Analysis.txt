@@ -1,0 +1,148 @@
+#------------------------------------------------------------------------------
+# Title:     Differential_Expression_Analysis.R
+# Author:    Dr. Juliana Arcila
+# Date:      28/02/2025
+# Description:
+# This script performs a differential expression analysis using DESeq2
+# It compares gene expression between untreated patient samples and controls or
+# between untreated patient samples and with patient samples treated with 
+# AG556, ALP, or DMSO.
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+# Input files:
+# - sampleInfoAll.rds: Metadata for all samples.
+# - raw_counts_noMito_noZeros.txt: Raw gene expression counts,
+# - Genes_hurecs.rds: Gene annotations.
+#
+# Output files:
+# - Deseq_results_*.csv: All differential expression results.
+# - Deseq_results_significant_*.csv: Filtered significant genes.
+# - results_up/down_significant_*.txt: Lists of significantly up/downregulated genes.
+#------------------------------------------------------------------------------
+
+# Set working directory
+setwd("NPHP1_project/")
+
+# Load required libraries
+library(DESeq2)
+library(dplyr)
+
+#------------------------------------------------------------------------------
+#  Load raw count data and select relevant samples
+#------------------------------------------------------------------------------
+
+countsdds <- readRDS("raw_counts_noMito_noZeros.rds")
+
+# Define samples to compare — choose one pair at a time (uncomment as needed)
+#Select samples for comparisons
+case_control<-c("control_rep1", "control_rep2", "NPHP1_rep1","NPHP1_rep2")
+#treatment_DMSO<-c("NPHP1_rep1","NPHP1_rep2","NPHP1_rep1_DMSO","NPHP1_rep2_DMSO")
+#treatment_AG556<-c("NPHP1_rep1","NPHP1_rep2", "NPHP1_rep1_AG556","NPHP1_rep2_AG556")
+#treatment_ALP<-c("NPHP1_rep1","NPHP1_rep2", "NPHP1_rep1_ALP","NPHP1_rep2_ALP")
+
+# Subset count data to selected samples
+countsdds <- countsdds[, selected_samples]
+
+# Load metadata and filter for selected samples
+metadata <- read.table("input/sampleInfoAll.txt", sep="\t", header=TRUE)
+
+metadata <- metadata[metadata$sample_id %in% selected_samples, ]
+
+# Load gene annotations
+Genes_hurecs <- readRDS("Genes_hurecs.rds")
+colnames(Genes_hurecs)[c(1, 7)] <- c("ensembl", "Entrez")
+
+#------------------------------------------------------------------------------
+# Pre-filter genes using a minimum expression threshold (P50 filter)
+#------------------------------------------------------------------------------
+
+# Create temporary DESeq2 object to compute normalized counts
+dds_tmp <- DESeqDataSetFromMatrix(countData = countsdds,
+                                  colData = metadata,
+                                  design = ~ treatment)
+
+dds_tmp <- estimateSizeFactors(dds_tmp)
+normalized_counts <- counts(dds_tmp, normalized = TRUE)
+
+# Flag genes expressed (>= 20 counts) in at least 50% of samples
+flag_matrix <- ifelse(normalized_counts >= 20, 1, 0)
+p50_genes <- rownames(flag_matrix)[rowMeans(flag_matrix) >= 0.5]
+length(p50_genes)  # Number of retained genes after filtering
+
+# Subset counts to filtered gene list
+counts_p50 <- countsdds[rownames(countsdds) %in% p50_genes, ]
+
+#------------------------------------------------------------------------------
+# Create DESeq2 object and run differential expression analysis
+#------------------------------------------------------------------------------
+
+dds <- DESeqDataSetFromMatrix(countData = counts_p50,
+                              colData = metadata,
+                              design = ~ treatment)
+
+# Set reference condition (adjust based on comparison of interest)
+#dds$treatment <- factor(dds$treatment, levels = c("untreated", "control"))
+# dds$treatment <- factor(dds$treatment, levels = c("untreated","DMSO"))
+# dds$treatment <- factor(dds$treatment, levels = c("untreated", "AG556"))
+# dds$treatment <- factor(dds$treatment, levels = c("untreated", "Alprostadil"))
+
+# Normalize and extract size factors
+dds <- estimateSizeFactors(dds)
+sizeFactors(dds)
+
+# Run DESeq2
+dds <- DESeq(dds)
+
+#------------------------------------------------------------------------------
+# Extract and annotate differential expression results
+#------------------------------------------------------------------------------
+
+resultsNames(dds)  # View available comparisons
+
+# Choose relevant comparison (adjust accordingly)
+res <- results(dds, name = "untreated_vs_control")
+# res <- results(dds, name = "treatment_AG556_vs_untreated")
+# res <- results(dds, name = "untreated_vs_DMSO")
+# res <- results(dds, name = "treatment_Alprostadil_vs_untreated")
+
+# Add Ensembl IDs
+res$ensembl <- rownames(res)
+resOrdered <- res[order(res$pvalue), ]  # Sort by p-value
+
+# Convert to data frame and join gene annotations
+dfres <- as.data.frame(resOrdered)
+dfres <- left_join(dfres, unique(Genes_hurecs[, c("Gene.name", "ensembl", "Entrez")]), by = "ensembl")
+
+# Save full results (Change output name according to your analysed samples)
+write.csv(dfres, "Deseq_results_comparison.csv")
+
+#------------------------------------------------------------------------------
+# Filter significant genes using threshold criteria
+#------------------------------------------------------------------------------
+
+# Significance filter: p-value < 0.05, FC > 1.5 or < 1/1.5, and SE < 1
+filtered_res_URECs <- subset(res,
+                             pvalue <= 0.05 &
+                             (log2FoldChange >= log2(1.5) | log2FoldChange <= log2(1 / 1.5)) &
+                             lfcSE < 1)
+
+filtered_res_URECs <- as.data.frame(filtered_res_URECs)
+filtered_res_URECs <- left_join(filtered_res_URECs, unique(Genes_hurecs[, c("Gene.name", "ensembl", "Entrez")]), by = "ensembl")
+filtered_res_URECs <- filtered_res_URECs %>% arrange(padj) %>% unique()
+filtered_res_URECs$FC <- 2^filtered_res_URECs$log2FoldChange  # Convert log2FC to fold change
+
+# Save filtered results (Change output name according to your analysed samples)
+write.csv(filtered_res_URECs, "Deseq_results_significant_treatment.csv")
+
+#------------------------------------------------------------------------------
+# Export gene lists for upregulated and downregulated genes
+#------------------------------------------------------------------------------
+
+down <- unique(filtered_res_URECs[filtered_res_URECs$log2FoldChange < 0, ]$Gene.name)
+up   <- unique(filtered_res_URECs[filtered_res_URECs$log2FoldChange > 0, ]$Gene.name)
+
+# Save gene names as .txt (Change output name according to your analysed samples)
+write.table(down, "results_down_significant_treatment.txt", sep = "\t", quote = FALSE, row.names = FALSE)
+write.table(up,   "results_up_significant_treatment.txt", sep = "\t", quote = FALSE, row.names = FALSE)
+

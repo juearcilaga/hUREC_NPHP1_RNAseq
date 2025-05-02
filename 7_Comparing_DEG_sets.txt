@@ -1,0 +1,71 @@
+################################################################################
+# Script Name: Comparing_DEG_sets.R
+# Author: Juliana E. Arcila-Galvis
+# Date: May 2025
+# Description: This script compares lists of differentially expressed genes (DEGs) 
+#              from different differential expression analysis. 
+#              It loads the results from DESeq2 for various treatments, filters 
+#              based on significance (p-value < 0.05 and log2 fold change > 0.58), 
+#              and compares the lists of DEGs between disease signatures and treatments.
+#              The results are written to text files for further analysis.
+#
+# Inputs:
+# - Deseq_results_DMSOvsAG556_batchcorrected.csv (DEGs from AG556 treatment)
+# - Deseq_results_DMSOvsALP_batchcorrected.csv (DEGs from ALP treatment)
+# - Deseq_results.csv (DEGs from NPHP1 disease signature)
+# 
+# Outputs:
+# - DMSOvs_treatment_comparisons_batchcorrected.txt (Comparison results for AG556 and ALP)
+################################################################################
+
+# Set working directory to the project folder
+setwd("NPHP1_project")
+
+# Load necessary libraries
+library(dplyr)
+
+################################################################################
+# Load and filter DESeq results for significant genes 
+################################################################################
+
+# Load DESeq results for AG556 treatment and filter based on p-value and log2 fold change
+Deseq_results_AG556 <- read.delim("Deseq_results_DMSOvsAG556_batchcorrected.csv", sep = ",")
+Deseq_results_AG556 <- Deseq_results_AG556 %>% filter(pvalue < 0.05, abs(log2FoldChange) > 0.58)
+
+# Load DESeq results for ALP treatment and filter similarly
+Deseq_results_ALP <- read.delim("Deseq_results_DMSOvsALP_batchcorrected.csv", sep = ",")
+Deseq_results_ALP <- Deseq_results_ALP %>% filter(pvalue < 0.05, abs(log2FoldChange) > 0.58)
+
+# Load DESeq results for NPHP1 disease signature and filter similarly
+Deseq_results_NPHP1 <- read.delim("Deseq_results.csv", sep = ",")
+Deseq_results_NPHP1 <- Deseq_results_NPHP1 %>% filter(pvalue < 0.05, abs(log2FoldChange) > 0.58)
+
+################################################################################
+# Compare DEGs between NPHP1 disease signature and AG556 treatment
+################################################################################
+
+# Join NPHP1 with AG556 results by "ensembl" gene ID and filter rows with valid data
+NPHP1vsAG556 <- left_join(Deseq_results_NPHP1, Deseq_results_AG556, by = "ensembl") %>% filter(is.na(baseMean.y) == FALSE)
+
+# Identify genes that have opposite log2 fold changes (i.e., different directions of expression)
+NPHP1vsAG556$opposite <- NPHP1vsAG556$log2FoldChange.x * NPHP1vsAG556$log2FoldChange.y < 0
+NPHP1vsAG556$comparison <- "NPHP1DMSvsAG556"
+
+################################################################################
+# Compare DEGs between NPHP1 disease signature and ALP treatment
+################################################################################
+
+# Join NPHP1 with ALP results and filter similarly
+NPHP1vsALP <- left_join(Deseq_results_NPHP1, Deseq_results_ALP, by = "ensembl") %>% filter(is.na(baseMean.y) == FALSE)
+
+# Identify opposite log2 fold change genes for the ALP comparison
+NPHP1vsALP$opposite <- NPHP1vsALP$log2FoldChange.x * NPHP1vsALP$log2FoldChange.y < 0
+NPHP1vsALP$comparison <- "NPHP1DMSOvsALP"
+
+################################################################################
+# Export Results 
+################################################################################
+
+# Write the comparison results for AG556 and ALP treatments to a text file
+write.table(rbind(NPHP1vsAG556, NPHP1vsALP), 
+            "DMSOvs_treatment_comparisons_batchcorrected.txt", sep = "\t", row.names = FALSE)

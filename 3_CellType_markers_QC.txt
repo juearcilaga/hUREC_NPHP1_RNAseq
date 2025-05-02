@@ -1,0 +1,122 @@
+#---
+# Script name: "CellType_markers_QC.R"
+# Author: "Dr. Juliana Arcila"
+# Date: "27/02/2025"
+# Description: 
+# This script performs analysis of the expression of celltype gene markers in
+#  hURECs samples from NPHP1 patients.
+#---
+
+#---
+# Inputs:
+# - celltype_markers.txt: Gene Markers for Various Cell Types. Columns "gene_name", "CellType"
+# - Genes_hurecs.rds: Biomart data from Ensembl genes GRCh38.p14 chromosomes 1:22,X,Y
+# - cpm_counts_treatment.txt: CPM normalized expression values.
+# - Deseq_results.csv: Optional differential expression results
+#---
+# Outputs:
+# - figures/markers_plot_AG556.svg:gene expression plot by cell type and gene
+#---
+
+#-------------------------------------------------------------------------------
+
+# Set working directory 
+setwd("NPHP1_project/")
+
+#Load libraries
+library(reshape2)
+library(tidyr)
+library(ggplot2)
+
+#-------------------------------------------------------------------------------
+# Annotate Count Data with Gene Markers
+#-------------------------------------------------------------------------------
+marker_df<-read.delim("input/celltype_markers.txt", sep="\t")
+colnames(marker_df)[2]<-"CellType"
+
+# Import Ensembl Biomart Annotations for the Genes
+Genes_hurecs <- readRDS("input/Genes_hurecs.rds")
+annotations <- unique(Genes_hurecs[, c("Gene.stable.ID", "Gene.name")])
+colnames(annotations) <- c("ensembl", "gene_name")
+
+# Import cpm counts
+# count_data <- read.delim("output/cpm_counts_AG556.txt", sep="\t") # Change to input treatment
+count_data <- read.delim("output/cpm_counts_ALP.txt", sep="\t") # Change to input treatment
+
+# Log Transform + Annotate
+count_data <-log2(count_data +1)
+count_data$ensembl <- rownames(count_data)
+
+# Merge with gene annotations
+count_data_annotated <- left_join(count_data, annotations)
+
+# Merge with cell type markers
+df <- left_join(count_data_annotated, marker_df)
+df <- df %>% filter(!is.na(df$CellType)) %>% unique()
+
+
+# Reshape data for plotting
+df_long <- pivot_longer(df, cols = 1:4, names_to = "Sample", values_to = "Expression")
+
+# Add column for sample type (Control or treatment)
+
+# df_long$Type <- ifelse(grepl("AG556", df_long$Sample), "NPHP1_AG556", "NPHP1_untreated") #Change  to treament
+df_long$Type <- ifelse(grepl("ALP", df_long$Sample), "NPHP1_ALP", "NPHP1_untreated") #Change  to treament
+df_long$CellType <- factor(df_long$CellType, levels = unique(df_long$CellType))
+
+
+markers_plot<-ggplot(df_long, aes(
+  x = gene_name,
+  y = as.numeric(Expression),
+  color = Type
+)) +
+  geom_point(aes(shape = Sample), size = 2) +  # Usar diferentes formas para cada muestra
+  labs(title = "Gene Expression by Cell Type",
+       x = "Gene",
+       y = "mRNA expression \n (RNA-Seq, log2(cpm))") +
+  theme_bw() +
+  # scale_color_manual(values = c(NPHP1_untreated = "#367156", NPHP1_AG556 =
+  scale_color_manual(values = c(NPHP1_untreated = "#367156", NPHP1_ALP =
+                                  "#b87800")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, face = "italic")) +  # Rotar etiquetas del eje X
+  facet_grid( ~ CellType, scales = "free_x", space = "free_x")  # Agrupar por tipo celular
+
+# ggsave("figures/markers_plot_AG556.svg", plot = markers_plot, width = 12, height =2.7, dpi = 300, device = "svg")
+ggsave("figures/markers_plot_ALP.svg", plot = markers_plot, width = 12, height =2.7, dpi = 300, device = "svg")
+
+#-------------------------------------------------------------------------------
+# Optional if DEA was performed
+#-------------------------------------------------------------------------------
+# Load DESeq2 results and filter for significant genes
+Deseq_fresults<-read.delim("output/Deseq_results.csv",sep=",")
+Deseq_fresults <-
+  Deseq_fresults[abs(Deseq_fresults$log2FoldChange) > 2 &  
+                   Deseq_fresults$padj <0.05,]
+
+# Update gene names for disregulated markers (red)
+disreg_markers <- marker_df$gene_name[marker_df$gene_name%in%Deseq_fresults$Gene.name]
+
+library(ggtext)  # Load the package
+
+# Modify gene_name to include HTML formatting
+df_long <- df_long %>%
+  mutate(gene_name = ifelse(gene_name %in% disreg_markers, 
+                            glue::glue("<span style='color:red'>{gene_name}</span>"), 
+                            gene_name))  # Remove <i> if not needed
+
+# Redraw plot with red labels for differentially expressed genes
+ggplot(df_long, aes(
+  x = gene_name,
+  y = as.numeric(Expression),
+  color = Type
+)) +
+  geom_point(aes(shape = Sample), size = 2) +  
+  labs(title = "Gene Expression by Cell Type",
+       x = "Gene",
+       y = "mRNA expression \n (RNA-Seq, log2(cpm))") +
+  theme_bw() +
+  scale_color_manual(values = c(NPHP1_untreated = "#367156", NPHP1_AG556 = "#b87800")) +
+  theme(
+    axis.text.x = element_markdown(angle = 90, hjust = 1)  # Enable HTML rendering
+  ) +
+  facet_grid(~ CellType, scales = "free_x", space = "free_x")

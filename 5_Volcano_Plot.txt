@@ -1,0 +1,192 @@
+
+###############################################################################
+# Script Name: Volcano_Plot.R 
+# Author: Dr. Juliana E. Arcila-Galvis
+# Date: 07/04/2025
+#
+# Description:
+# This script reads DESeq2 differential expression results
+# and generates a volcano plot with optional label annotation for the top 
+# upregulated and downregulated genes. It applies p-value and fold change 
+# thresholds to define significance and compresses extreme -log10(p-value)
+# values for improved visualization.
+#
+# Inputs:
+#   - CSV file: Deseq_results_treatment.csv
+#
+# Outputs:
+#   - Volcano plot with gene labels: volcano_plot_treatment.svg
+#   - Volcano plot without labels: volcano_plot2.svg
+#
+
+################################################################################ 
+
+#Set working directory
+
+setwd("NPHP1_project/")
+
+# Load Required Packages
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+
+#Import Deseq2 results # Change to import results from comporison of interest
+Deseq_results<-read.delim("Deseq_results_ALP.csv",sep = ",")
+
+dim(Deseq_results)
+
+# Only genes with non-NA adjusted p-values (padj) are used.
+Deseq_results<-Deseq_results[is.na(Deseq_results$padj)!=TRUE,]
+
+# Significance is defined as p-value < 0.05 and |log2FoldChange| > log2(1.5), and standard error (lfcSE) < 0.5.
+
+Deseq_results_up <-
+  Deseq_results[Deseq_results$pvalue < 0.05 &
+                  Deseq_results$log2FoldChange > log2(1.5) &
+                  Deseq_results$lfcSE < 0.5,]
+Deseq_results_down <-
+  Deseq_results[Deseq_results$pvalue < 0.05 &
+                  Deseq_results$log2FoldChange <= log2(1 / 1.5) &
+                  Deseq_results$lfcSE < 0.5,]
+
+dim(Deseq_results_up)
+dim(Deseq_results_down)
+
+Deseq_results$Significance <- ifelse(
+  Deseq_results$padj < 0.05 & Deseq_results$log2FoldChange > log2(1.5),
+  "Upregulated",
+  "Downregulated"
+)
+
+# Add the condition to modify Significance based on lfSE < 0.5
+Deseq_results$Significance <- ifelse(
+  Deseq_results$Significance == "Upregulated" & Deseq_results$lfcSE < 0.5,
+  "Upregulated lfSE < 0.5",
+  Deseq_results$Significance
+)
+
+Deseq_results$Significance <- ifelse(
+  Deseq_results$Significance == "Downregulated" & Deseq_results$lfcSE < 0.5,
+  "Downregulated lfSE < 0.5",
+  Deseq_results$Significance
+)
+
+
+# Adjust for y-axis values
+# y-axis is compressed for p-values with -log10(p) > 10 using log10 scaling.
+Deseq_results <- Deseq_results %>%
+  mutate(
+    neg_log10_pvalue  = -log10(padj),
+    adjusted_y = if_else(
+      neg_log10_pvalue  > 10,
+      10 + log10(neg_log10_pvalue ),
+      neg_log10_pvalue 
+    ))
+
+Deseq_results$gene_name<-gsub(".*_","",Deseq_results$ensembl)
+
+
+# Identify most significant genes
+# Top 5 upregulated and downregulated genes are labeled
+top_genes <- Deseq_results %>%
+  filter(Significance %in% c("Upregulated")) %>%
+  arrange(padj, desc(abs(log2FoldChange))) %>%  # Sort by padj and absolute LFC
+  slice_head(n = 10) %>%
+  bind_rows(
+    Deseq_results %>%
+      filter(Significance %in% c("Downregulated")) %>%
+      arrange(padj, desc(abs(log2FoldChange))) %>%
+      slice_head(n = 10)
+  )
+
+# Remove duplicates
+top_genes <- unique(top_genes)
+
+# Generate Volcano Plot
+volcano_plot <-
+  ggplot(Deseq_results, aes(x = log2FoldChange, y = adjusted_y)) +
+  geom_point(
+    aes(fill = Significance, color = Significance),
+    size = 2,
+    alpha = 0.4,
+    shape = 21,
+    stroke = 1
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Upregulated" = "#C0272C",
+      "Downregulated" = "#395A88",
+      "Upregulated lfSE < 0.5" =  "#f0afb1",
+      "Downregulated lfSE < 0.5" = "#a5b5cc",
+      "Not Significant" = "grey"
+    )
+  ) +
+  scale_color_manual(
+    values = c(
+      "Upregulated" = "#C0272C",
+      "Downregulated" = "#395A88",
+      "Upregulated lfSE < 0.5" =  "#f0afb1",
+      "Downregulated lfSE < 0.5" = "#a5b5cc",
+      "Not Significant" = "grey"
+    )
+  ) +
+  geom_text_repel(
+    data = top_genes,
+    aes(label = Gene.name),
+    size = 3,
+    max.overlaps = Inf,
+    nudge_y = 1
+  ) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dotted", color = "black", linewidth = 0.8) +  # FC thresholds
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", color = "black", linewidth = 0.8) +   # pvalue  threshold
+  labs(title = "Volcano Plot", x = "Log2 Fold Change", y = "-Log10 padj (Compressed above 10)") +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+
+# Print Volcano plot
+print(volcano_plot)
+
+# Save Volcano Plot into svg format, keep same size for consistency # Change name for comparison of interest
+ggsave(file="volcano_plot_ALP.svg", plot=volcano_plot, width=5, height=4)
+
+#------------------------------------------------------------------------------=
+# Volcano Plot without labels - Optional
+#------------------------------------------------------------------------------=
+
+# Generate Volcano Plot
+volcano_plot2 <-
+  ggplot(Deseq_results, aes(x = log2FoldChange, y = adjusted_y)) +
+  geom_point(
+    aes(fill = Significance, color = Significance),
+    size = 2,
+    alpha = 0.4,
+    shape = 21,
+    stroke = 1
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Upregulated" = "#C0272C",
+      "Downregulated" = "#395A88",
+      "Upregulated lfSE < 0.5" =  "#f0afb1",
+      "Downregulated lfSE < 0.5" = "#a5b5cc",
+      "Not Significant" = "grey"
+    )
+  ) +
+  scale_color_manual(
+    values = c(
+      "Upregulated" = "#C0272C",
+      "Downregulated" = "#395A88",
+      "Upregulated lfSE < 0.5" =  "#f0afb1",
+      "Downregulated lfSE < 0.5" = "#a5b5cc",
+      "Not Significant" = "grey"
+    )
+  ) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dotted", color = "black", linewidth = 0.8) +  # FC thresholds
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", color = "black", linewidth = 0.8) +   # pvalue  threshold
+  labs(title = "Volcano Plot", x = "Log2 Fold Change", y = "-Log10 padj (Compressed above 10)") +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+
+# Print Volcano plot
+print(volcano_plot)
+
+# Save Volcano Plot into svg format, keep same size for consistency # Change name for comparison of interest
+ggsave(file="volcano_plot2.svg", plot=volcano_plot2, width=5, height=4)
